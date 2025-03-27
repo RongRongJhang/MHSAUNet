@@ -87,12 +87,11 @@ class Denoiser(nn.Module):
             if layer.bias is not None:
                 init.constant_(layer.bias, 0)
 
-class MHSAUnet(nn.Module):
+class MHSAUNet(nn.Module):
     def __init__(self, num_filters=32):
-        super(MHSAUnet, self).__init__()
+        super(MHSAUNet, self).__init__()
         # 為每個分支定義 Denoiser 模組（包含 MultiHeadSelfAttention）
-        self.denoiser_y = Denoiser(num_filters)
-        self.denoiser_cbcr = Denoiser(num_filters)
+        self.denoiser_ycbcr = Denoiser(num_filters)
 
         # 最終的 3x3 卷積層
         self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
@@ -142,21 +141,19 @@ class MHSAUnet(nn.Module):
         # 將 RGB 轉換為 YCbCr
         ycbcr = self._rgb_to_oklab(x)
         y, cb, cr = torch.split(ycbcr, 1, dim=1)
-        combined_cbcr = torch.cat([cb, cr], dim=1)
 
         # 對 Y 和 Cb 分支進行 Gamma 校正
         y = self._gamma_correction(y, self.gamma)
         cb = self._gamma_correction(cb, self.gamma)
 
-        # 對每個分支進行去噪處理
-        y_denoised = self.denoiser_y(y)
-        cbcr_denoised = self.denoiser_cbcr(combined_cbcr)
+        # 將處理後的三個分支合併
+        combined = torch.cat([y, cb, cr], dim=1)
 
-        # 將處理後的二個分支合併
-        combined = torch.cat([y_denoised, cbcr_denoised], dim=1)
+        # 對合併後的分支進行去噪處理
+        ycbcr_denoised = self.denoiser_ycbcr(combined)
 
         # 通過最終的 3x3 卷積層
-        output = self.final_conv(combined)
+        output = self.final_conv(ycbcr_denoised)
         
         # 確保輸出範圍在 [0, 1]
         return torch.sigmoid(output)

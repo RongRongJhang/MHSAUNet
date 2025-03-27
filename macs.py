@@ -1,10 +1,10 @@
 import torch
 from torchprofile import profile_macs
-from model import GammaUnet
+from model import MHSAUNet
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model = GammaUnet().to(device)
+model = MHSAUNet().to(device)
 
 input_tensor = torch.randn(1, 3, 256, 256).to(device) 
 

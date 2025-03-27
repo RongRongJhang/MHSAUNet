@@ -6,7 +6,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
 from torchmetrics.functional import structural_similarity_index_measure
-from model import GammaUnet
+from model import MHSAUNet
 from losses import CombinedLoss
 from dataloader import create_dataloaders
 import os
@@ -114,7 +114,7 @@ def main():
     print(f'Train loader: {len(train_loader)}; Test loader: {len(test_loader)}')
 
     # Model, loss, optimizer, and scheduler
-    model = GammaUnet().to(device)
+    model = MHSAUNet().to(device)
     # if torch.cuda.device_count() > 1:
     #     model = torch.nn.DataParallel(model)
 
