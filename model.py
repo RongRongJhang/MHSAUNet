@@ -49,7 +49,7 @@ class Denoiser(nn.Module):
     def __init__(self, num_filters, kernel_size=3, activation='relu'):
         super(Denoiser, self).__init__()
         # 定義卷積層
-        self.conv1 = nn.Conv2d(1, num_filters, kernel_size=kernel_size, padding=1)
+        self.conv1 = nn.Conv2d(3, num_filters, kernel_size=kernel_size, padding=1)
         self.conv2 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
         self.conv3 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
         self.conv4 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
@@ -60,8 +60,8 @@ class Denoiser(nn.Module):
         self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
         self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
         # 輸出層與殘差層
-        self.output_layer = nn.Conv2d(1, 1, kernel_size=kernel_size, padding=1)
-        self.res_layer = nn.Conv2d(num_filters, 1, kernel_size=kernel_size, padding=1)
+        self.output_layer = nn.Conv2d(3, 3, kernel_size=kernel_size, padding=1)
+        self.res_layer = nn.Conv2d(num_filters, 3, kernel_size=kernel_size, padding=1)
         self.activation = getattr(F, activation)
         self._init_weights()
 
