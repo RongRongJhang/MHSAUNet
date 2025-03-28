@@ -94,11 +94,11 @@ def main():
     # Paths and device setup
     test_low = 'data/LOLv1/Test/input'
     test_high = 'data/LOLv1/Test/target'
-    weights_path = '/content/drive/MyDrive/Gamma-Unet/best_model.pth'
+    weights_path = '/content/drive/MyDrive/MHSAUNet/best_model.pth'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     dataset_name = test_low.split('/')[1]
-    result_dir = '/content/drive/MyDrive/Gamma-Unet/results/testing/output'
+    result_dir = '/content/drive/MyDrive/MHSAUNet/results/testing/output'
 
     _, test_loader = create_dataloaders(None, None, test_low, test_high, crop_size=None, batch_size=1)
     print(f'Test loader: {len(test_loader)}')
@@ -112,7 +112,7 @@ def main():
 
     # write log
     now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    file_path = "/content/drive/MyDrive/Gamma-Unet/results/testing/metrics.md"
+    file_path = "/content/drive/MyDrive/MHSAUNet/results/testing/metrics.md"
     file_exists = os.path.exists(file_path)
 
     with open(file_path, "a") as f:

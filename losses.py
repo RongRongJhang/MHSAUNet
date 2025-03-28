@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 from pytorch_msssim import ms_ssim
 import torchvision.transforms as T
-import pytorch_ssim
+# import pytorch_ssim
 
 class VGGPerceptualLoss(nn.Module):
     def __init__(self, device):
@@ -29,8 +29,8 @@ class L1CharbonnierLoss(torch.nn.Module):
         loss = torch.mean(error)
         return loss
 
-def mse_loss(pred, target):
-    return F.mse_loss(pred, target, reduction='none')
+# def mse_loss(pred, target):
+#     return F.mse_loss(pred, target, reduction='none')
 
 def color_loss(y_true, y_pred):
     return torch.mean(torch.abs(torch.mean(y_true, dim=[1, 2, 3]) - torch.mean(y_pred, dim=[1, 2, 3])))
@@ -46,9 +46,9 @@ def smooth_l1_loss(y_true, y_pred):
 def multiscale_ssim_loss(y_true, y_pred, max_val=1.0, power_factors=[0.5, 0.5]):
     return 1.0 - ms_ssim(y_true, y_pred, data_range=max_val, size_average=True)
 
-def ssim_loss(y_true, y_pred):
-    ssim_loss = pytorch_ssim.SSIM(window_size = 11)
-    return 1.0 - ssim_loss(y_true, y_pred)
+# def ssim_loss(y_true, y_pred):
+#     ssim_loss = pytorch_ssim.SSIM(window_size = 11)
+#     return 1.0 - ssim_loss(y_true, y_pred)
 
 def gaussian_kernel(x, mu, sigma):
     return torch.exp(-0.5 * ((x - mu) / sigma) ** 2)
@@ -87,8 +87,8 @@ class CombinedLoss(nn.Module):
         hist_l = histogram_loss(y_true, y_pred)
         psnr_l = psnr_loss(y_true, y_pred)
         color_l = color_loss(y_true, y_pred)
-        mse_l = mse_loss(y_pred, y_true)
-        ssim_l = ssim_loss(y_true, y_pred)
+        # mse_l = mse_loss(y_pred, y_true)
+        # ssim_l = ssim_loss(y_true, y_pred)
 
         total_loss = (self.alpha1 * smooth_l1_l + self.alpha2 * perc_l + 
                       self.alpha3 * hist_l + self.alpha5 * psnr_l + 

@@ -107,7 +107,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'LR: {learning_rate}; Epochs: {num_epochs}')
 
-    result_dir = '/content/drive/MyDrive/Gamma-Unet/results/training/output'
+    result_dir = '/content/drive/MyDrive/MHSAUNet/results/training/output'
 
     # Data loaders
     train_loader, test_loader = create_dataloaders(train_low, train_high, test_low, test_high, crop_size=256, batch_size=1)
@@ -152,27 +152,27 @@ def main():
 
         if avg_psnr > best_psnr:
             best_psnr = avg_psnr
-            model_path = "/content/drive/MyDrive/Gamma-Unet/best_psnr_model.pth"
+            model_path = "/content/drive/MyDrive/MHSAUNet/best_psnr_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with PSNR: {best_psnr:.6f}')
 
         # add SSIM
         if avg_ssim > best_ssim:
             best_ssim = avg_ssim
-            model_path = "/content/drive/MyDrive/Gamma-Unet/best_ssim_model.pth"
+            model_path = "/content/drive/MyDrive/MHSAUNet/best_ssim_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with SSIM: {best_ssim:.6f}')
         
         # add LPIPS
         if avg_lpips < best_lpips:
             best_lpips = avg_lpips
-            model_path = "/content/drive/MyDrive/Gamma-Unet/best_lpips_model.pth"
+            model_path = "/content/drive/MyDrive/MHSAUNet/best_lpips_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with LPIPS: {best_lpips:.6f}')
         
         # write log
         now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        file_path = "/content/drive/MyDrive/Gamma-Unet/results/training/metrics.md"
+        file_path = "/content/drive/MyDrive/MHSAUNet/results/training/metrics.md"
         file_exists = os.path.exists(file_path)
 
         with open(file_path, "a") as f:

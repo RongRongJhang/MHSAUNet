@@ -87,16 +87,62 @@ class Denoiser(nn.Module):
             if layer.bias is not None:
                 init.constant_(layer.bias, 0)
 
+class RGB_HVI(nn.Module):
+    def __init__(self):
+        super(RGB_HVI, self).__init__()
+        self.density_k = torch.nn.Parameter(torch.full([1],0.2)) # k is reciprocal to the paper mentioned
+        self.gated = False
+        self.gated2= False
+        self.alpha = 1.0
+        self.this_k = 0
+        
+    def HVIT(self, img):
+        pi = 3.141592653589793
+        eps = 1e-8
+        device = img.device
+        dtypes = img.dtype
+        hue = torch.Tensor(img.shape[0], img.shape[2], img.shape[3]).to(device).to(dtypes)
+        value = img.max(1)[0].to(dtypes)
+        img_min = img.min(1)[0].to(dtypes)
+        hue[img[:,2]==value] = 4.0 + ( (img[:,0]-img[:,1]) / (value - img_min + eps)) [img[:,2]==value]
+        hue[img[:,1]==value] = 2.0 + ( (img[:,2]-img[:,0]) / (value - img_min + eps)) [img[:,1]==value]
+        hue[img[:,0]==value] = (0.0 + ((img[:,1]-img[:,2]) / (value - img_min + eps)) [img[:,0]==value]) % 6
+
+        hue[img.min(1)[0]==value] = 0.0
+        hue = hue/6.0
+
+        saturation = (value - img_min ) / (value + eps )
+        saturation[value==0] = 0
+
+        hue = hue.unsqueeze(1)
+        saturation = saturation.unsqueeze(1)
+        value = value.unsqueeze(1)
+        
+        k = self.density_k
+        self.this_k = k.item()
+        
+        color_sensitive = ((value * 0.5 * pi).sin() + eps).pow(k)
+        ch = (2.0 * pi * hue).cos()
+        cv = (2.0 * pi * hue).sin()
+        H = color_sensitive * saturation * ch
+        V = color_sensitive * saturation * cv
+        I = value
+        xyz = torch.cat([H, V, I],dim=1)
+        return xyz
+
 class MHSAUNet(nn.Module):
     def __init__(self, num_filters=32):
         super(MHSAUNet, self).__init__()
         # 為每個分支定義 Denoiser 模組（包含 MultiHeadSelfAttention）
-        self.denoiser_ycbcr = Denoiser(num_filters)
+        # self.denoiser_ycbcr = Denoiser(num_filters)
+        self.denoiser_hvi = Denoiser(num_filters)
 
         # 最終的 3x3 卷積層
         self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
         
         self.gamma = 0.4  # Gamma 校正參數
+
+        self.rgb_hvi = RGB_HVI()
         self._init_weights()
 
     def _rgb_to_ycbcr(self, image):
@@ -138,25 +184,33 @@ class MHSAUNet(nn.Module):
         return torch.pow(image + eps, gamma)
 
     def forward(self, x):
-        # 將 RGB 轉換為 YCbCr
-        ycbcr = self._rgb_to_oklab(x)
-        y, cb, cr = torch.split(ycbcr, 1, dim=1)
-
-        # 對 Y 和 Cb 分支進行 Gamma 校正
-        y = self._gamma_correction(y, self.gamma)
-        cb = self._gamma_correction(cb, self.gamma)
-
-        # 將處理後的三個分支合併
-        combined = torch.cat([y, cb, cr], dim=1)
-
-        # 對合併後的分支進行去噪處理
-        ycbcr_denoised = self.denoiser_ycbcr(combined)
-
-        # 通過最終的 3x3 卷積層
-        output = self.final_conv(ycbcr_denoised)
-        
-        # 確保輸出範圍在 [0, 1]
+        hvi = self.rgb_hvi.HVIT(x)
+        h, v, i = torch.split(hvi, 1, dim=1)
+        i = self._gamma_correction(i, self.gamma)
+        combined = torch.cat([h, v, i], dim=1)
+        hvi_denoised = self.denoiser_hvi(combined)
+        output = self.final_conv(hvi_denoised)
         return torch.sigmoid(output)
+
+        # # 將 RGB 轉換為 YCbCr
+        # ycbcr = self._rgb_to_oklab(x)
+        # y, cb, cr = torch.split(ycbcr, 1, dim=1)
+
+        # # 對 Y 和 Cb 分支進行 Gamma 校正
+        # y = self._gamma_correction(y, self.gamma)
+        # cb = self._gamma_correction(cb, self.gamma)
+
+        # # 將處理後的三個分支合併
+        # combined = torch.cat([y, cb, cr], dim=1)
+
+        # # 對合併後的分支進行去噪處理
+        # ycbcr_denoised = self.denoiser_ycbcr(combined)
+
+        # # 通過最終的 3x3 卷積層
+        # output = self.final_conv(ycbcr_denoised)
+        
+        # # 確保輸出範圍在 [0, 1]
+        # return torch.sigmoid(output)
 
     def _init_weights(self):
         init.kaiming_uniform_(self.final_conv.weight, a=0, mode='fan_in', nonlinearity='relu')
