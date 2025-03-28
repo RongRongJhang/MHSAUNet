@@ -184,33 +184,33 @@ class MHSAUNet(nn.Module):
         return torch.pow(image + eps, gamma)
 
     def forward(self, x):
-        hvi = self.rgb_hvi.HVIT(x)
-        h, v, i = torch.split(hvi, 1, dim=1)
-        i = self._gamma_correction(i, self.gamma)
-        combined = torch.cat([h, v, i], dim=1)
-        hvi_denoised = self.denoiser_hvi(combined)
-        output = self.final_conv(hvi_denoised)
-        return torch.sigmoid(output)
-
-        # # 將 RGB 轉換為 YCbCr
-        # ycbcr = self._rgb_to_oklab(x)
-        # y, cb, cr = torch.split(ycbcr, 1, dim=1)
-
-        # # 對 Y 和 Cb 分支進行 Gamma 校正
-        # y = self._gamma_correction(y, self.gamma)
-        # cb = self._gamma_correction(cb, self.gamma)
-
-        # # 將處理後的三個分支合併
-        # combined = torch.cat([y, cb, cr], dim=1)
-
-        # # 對合併後的分支進行去噪處理
-        # ycbcr_denoised = self.denoiser_ycbcr(combined)
-
-        # # 通過最終的 3x3 卷積層
-        # output = self.final_conv(ycbcr_denoised)
-        
-        # # 確保輸出範圍在 [0, 1]
+        # hvi = self.rgb_hvi.HVIT(x)
+        # h, v, i = torch.split(hvi, 1, dim=1)
+        # i = self._gamma_correction(i, self.gamma)
+        # combined = torch.cat([h, v, i], dim=1)
+        # hvi_denoised = self.denoiser_hvi(combined)
+        # output = self.final_conv(hvi_denoised)
         # return torch.sigmoid(output)
+
+        # 將 RGB 轉換為 YCbCr
+        ycbcr = self._rgb_to_oklab(x)
+        y, cb, cr = torch.split(ycbcr, 1, dim=1)
+
+        # 對 Y 和 Cb 分支進行 Gamma 校正
+        y = self._gamma_correction(y, self.gamma)
+        cb = self._gamma_correction(cb, self.gamma)
+
+        # 將處理後的三個分支合併
+        combined = torch.cat([y, cb, cr], dim=1)
+
+        # 對合併後的分支進行去噪處理
+        ycbcr_denoised = self.denoiser_ycbcr(combined)
+
+        # 通過最終的 3x3 卷積層
+        output = self.final_conv(ycbcr_denoised)
+        
+        # 確保輸出範圍在 [0, 1]
+        return torch.sigmoid(output)
 
     def _init_weights(self):
         init.kaiming_uniform_(self.final_conv.weight, a=0, mode='fan_in', nonlinearity='relu')
