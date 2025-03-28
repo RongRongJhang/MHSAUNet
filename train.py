@@ -120,9 +120,9 @@ def main():
     test_high = 'data/LOLv1/Test/target'
     base_lr = 1e-5  # Warmup 起始學習率
     max_lr = 2e-4   # 最大學習率
-    num_epochs = 1500
-    warmup_epochs = 50  # Warmup 階段的 epoch 數
-    cosine_epochs = 950  # CosineAnnealingLR 階段的 epoch 數
+    num_epochs = 1000  # 總 epoch 數改為 1000
+    warmup_epochs = 50  # Warmup 階段保持 50 epoch
+    cosine_epochs = 650  # CosineAnnealingLR 階段改為 650 epoch
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Base LR: {base_lr}; Max LR: {max_lr}; Epochs: {num_epochs}')
 
@@ -137,8 +137,8 @@ def main():
     criterion = CombinedLoss(device)
     optimizer = optim.Adam(model.parameters(), lr=base_lr)  # 初始學習率設為 base_lr
     warmup_scheduler = WarmupScheduler(optimizer, warmup_epochs, base_lr, max_lr)
-    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs)
-    plateau_scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, verbose=True)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs)  # T_max 改為 650
+    plateau_scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, verbose=True)  # mode='max' 因為 SSIM 越大越好
 
     scaler = torch.cuda.amp.GradScaler()
     best_psnr = 0
@@ -163,17 +163,22 @@ def main():
 
             train_loss += loss.item()
 
+        # 計算每個 epoch 的平均訓練損失
+        avg_train_loss = train_loss / len(train_loader)
+
         # 驗證階段
         avg_psnr, avg_ssim, avg_lpips = validate(model, test_loader, device, result_dir)
-        print(f'Epoch {epoch + 1}/{num_epochs}, PSNR: {avg_psnr:.6f}, SSIM: {avg_ssim:.6f}, LPIPS: {avg_lpips:.6f}')
+
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f'Epoch {epoch + 1}/{num_epochs}, LR: {current_lr:.6f}, Loss: {avg_train_loss:.6f}, PSNR: {avg_psnr:.6f}, SSIM: {avg_ssim:.6f}, LPIPS: {avg_lpips:.6f}')
 
         # 學習率調度邏輯
         if epoch < warmup_epochs:
-            warmup_done = warmup_scheduler.step()
+            warmup_scheduler.step()
         elif epoch < warmup_epochs + cosine_epochs:
             cosine_scheduler.step()
         else:
-            plateau_scheduler.step(avg_psnr)  # 根據 PSNR 動態調整學習率
+            plateau_scheduler.step(avg_ssim)  # 根據驗證集 SSIM 動態調整學習率
 
         # 儲存最佳模型
         if avg_psnr > best_psnr:
@@ -198,15 +203,12 @@ def main():
         now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         file_path = "/content/drive/MyDrive/MHSAUNet/results/training/metrics.md"
         file_exists = os.path.exists(file_path)
+
         with open(file_path, "a") as f:
             if not file_exists:
-                f.write("| Timestemp | Epoch | PSNR | SSIM | LPIPS |\n")
-                f.write("|-----------|-------|------|------|-------|\n")
-            f.write(f"| {now} | {epoch + 1} | {avg_psnr:.6f} | {avg_ssim:.6f} | {avg_lpips:.6f} |\n")
-
-        # 打印當前學習率
-        current_lr = optimizer.param_groups[0]['lr']
-        print(f'Current Learning Rate: {current_lr:.6f}')
+                f.write("|   Timestemp   |   Epoch   |    LR    |   Loss   |   PSNR   |   SSIM   |   LPIPS   |\n")
+                f.write("|---------------|-----------|----------|----------|----------|----------|-----------|\n")
+            f.write(f"|   {now}   | {epoch + 1} | {current_lr:.6f} | {avg_train_loss:.6f} |  {avg_psnr:.6f}  |  {avg_ssim:.6f}  |  {avg_lpips:.6f}  |\n")
 
 if __name__ == '__main__':
     main()
