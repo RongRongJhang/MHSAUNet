@@ -206,8 +206,10 @@ class MHSAUNet(nn.Module):
         # 對合併後的分支進行去噪處理
         ycbcr_denoised = self.denoiser_ycbcr(combined)
 
+        mhsa_output = MultiHeadSelfAttention(embed_size=ycbcr_denoised, num_heads=4)
+
         # 通過最終的 3x3 卷積層
-        output = self.final_conv(ycbcr_denoised)
+        output = self.final_conv(mhsa_output)
         
         # 確保輸出範圍在 [0, 1]
         return torch.sigmoid(output)
