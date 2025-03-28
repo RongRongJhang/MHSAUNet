@@ -3,6 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
 
+class Feature_Refinement_Block(nn.Module):  
+    def __init__(self, channel, reduction):
+        super(Feature_Refinement_Block, self).__init__()
+        reduced_channel_ca = max(1, channel // reduction)
+        reduced_channel_sa = max(1, channel // 8)
+        self.ca = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channel, reduced_channel_ca, 1, padding=0, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(reduced_channel_ca, channel, 1, padding=0, bias=True),
+            nn.Sigmoid()
+        )
+        self.sa = nn.Sequential(
+            nn.Conv2d(channel, channel, 3, 1, 1),
+            nn.Conv2d(channel, reduced_channel_sa, 3, 1, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(reduced_channel_sa, channel, 3, 1, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        a = self.ca(x)
+        t = self.sa(x)
+        s = torch.mul((1 - t), a) + torch.mul(t, x)
+        return s
+
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, embed_size, num_heads):
         super(MultiHeadSelfAttention, self).__init__()
@@ -131,17 +157,12 @@ class RGB_HVI(nn.Module):
         return xyz
 
 class MHSAUNet(nn.Module):
-    def __init__(self, num_filters=32):
+    def __init__(self, num_filters=32, reduction=16):
         super(MHSAUNet, self).__init__()
-        # 為每個分支定義 Denoiser 模組（包含 MultiHeadSelfAttention）
         self.denoiser_ycbcr = Denoiser(num_filters)
-        # self.denoiser_hvi = Denoiser(num_filters)
-
-        # 最終的 3x3 卷積層
+        self.frb = Feature_Refinement_Block(channel=3, reduction=reduction)
         self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
-        
-        self.gamma = 0.4  # Gamma 校正參數
-
+        self.gamma = 0.4
         self.rgb_hvi = RGB_HVI()
         self._init_weights()
 
@@ -184,34 +205,18 @@ class MHSAUNet(nn.Module):
         return torch.pow(image + eps, gamma)
 
     def forward(self, x):
-        # hvi = self.rgb_hvi.HVIT(x)
-        # h, v, i = torch.split(hvi, 1, dim=1)
-        # i = self._gamma_correction(i, self.gamma)
-        # combined = torch.cat([h, v, i], dim=1)
-        # hvi_denoised = self.denoiser_hvi(combined)
-        # output = self.final_conv(hvi_denoised)
-        # return torch.sigmoid(output)
-
-        # 將 RGB 轉換為 YCbCr
         ycbcr = self._rgb_to_oklab(x)
         y, cb, cr = torch.split(ycbcr, 1, dim=1)
 
-        # 對 Y 和 Cb 分支進行 Gamma 校正
         y = self._gamma_correction(y, self.gamma)
         cb = self._gamma_correction(cb, self.gamma)
 
-        # 將處理後的三個分支合併
         combined = torch.cat([y, cb, cr], dim=1)
 
-        # 對合併後的分支進行去噪處理
         ycbcr_denoised = self.denoiser_ycbcr(combined)
-
-        mhsa_output = MultiHeadSelfAttention(embed_size=ycbcr_denoised, num_heads=4)
-
-        # 通過最終的 3x3 卷積層
-        output = self.final_conv(mhsa_output)
+        refined_features = self.frb(ycbcr_denoised)
+        output = self.final_conv(refined_features)
         
-        # 確保輸出範圍在 [0, 1]
         return torch.sigmoid(output)
 
     def _init_weights(self):
