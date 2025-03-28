@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.nn as nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
 from torchmetrics.functional import structural_similarity_index_measure
@@ -96,16 +96,35 @@ def validate(model, dataloader, device, result_dir):
     avg_lpips = total_lpips / len(dataloader)
     return avg_psnr, avg_ssim, avg_lpips
 
+class WarmupScheduler:
+    def __init__(self, optimizer, warmup_epochs, base_lr, max_lr):
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.base_lr = base_lr
+        self.max_lr = max_lr
+        self.current_epoch = 0
+
+    def step(self):
+        self.current_epoch += 1
+        if self.current_epoch <= self.warmup_epochs:
+            lr = self.base_lr + (self.max_lr - self.base_lr) * (self.current_epoch / self.warmup_epochs)
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+        return self.current_epoch > self.warmup_epochs
+
 def main():
     # Hyperparameters
     train_low = 'data/LOLv1/Train/input'
     train_high = 'data/LOLv1/Train/target'
     test_low = 'data/LOLv1/Test/input'
     test_high = 'data/LOLv1/Test/target'
-    learning_rate = 2e-4 
-    num_epochs = 1500
+    base_lr = 1e-5  # Warmup 起始學習率
+    max_lr = 2e-4   # 最大學習率
+    num_epochs = 1000  # 總 epoch 數改為 1000
+    warmup_epochs = 50  # Warmup 階段保持 50 epoch
+    cosine_epochs = 650  # CosineAnnealingLR 階段改為 650 epoch
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'LR: {learning_rate}; Epochs: {num_epochs}')
+    print(f'Base LR: {base_lr}; Max LR: {max_lr}; Epochs: {num_epochs}')
 
     result_dir = '/content/drive/MyDrive/MHSAUNet/results/training/output'
 
@@ -115,18 +134,17 @@ def main():
 
     # Model, loss, optimizer, and scheduler
     model = MHSAUNet().to(device)
-    # if torch.cuda.device_count() > 1:
-    #     model = torch.nn.DataParallel(model)
-
     criterion = CombinedLoss(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
-    scaler = torch.cuda.amp.GradScaler()
+    optimizer = optim.Adam(model.parameters(), lr=base_lr)  # 初始學習率設為 base_lr
+    warmup_scheduler = WarmupScheduler(optimizer, warmup_epochs, base_lr, max_lr)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs)  # T_max 改為 650
+    plateau_scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, verbose=True)  # mode='max' 因為 SSIM 越大越好
 
+    scaler = torch.amp.GradScaler('cuda')
     best_psnr = 0
     best_ssim = 0
     best_lpips = 1
-    
+
     print('Training started.')
     for epoch in range(num_epochs):
         model.train()
@@ -136,7 +154,6 @@ def main():
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad()
-
             outputs = model(inputs)
             loss = criterion(outputs, targets)
             
@@ -146,41 +163,52 @@ def main():
 
             train_loss += loss.item()
 
-        avg_psnr, avg_ssim, avg_lpips = validate(model, test_loader, device, result_dir)
-        print(f'Epoch {epoch + 1}/{num_epochs}, PSNR: {avg_psnr:.6f}, SSIM: {avg_ssim:.6f}, LPIPS: {avg_lpips:.6f}')
-        scheduler.step()
+        # 計算每個 epoch 的平均訓練損失
+        avg_train_loss = train_loss / len(train_loader)
 
+        # 驗證階段
+        avg_psnr, avg_ssim, avg_lpips = validate(model, test_loader, device, result_dir)
+
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f'Epoch {epoch + 1}/{num_epochs}, LR: {current_lr:.6f}, Loss: {avg_train_loss:.6f}, PSNR: {avg_psnr:.6f}, SSIM: {avg_ssim:.6f}, LPIPS: {avg_lpips:.6f}')
+
+        # 學習率調度邏輯
+        if epoch < warmup_epochs:
+            warmup_scheduler.step()
+        elif epoch < warmup_epochs + cosine_epochs:
+            cosine_scheduler.step()
+        else:
+            plateau_scheduler.step(avg_ssim)  # 根據驗證集 SSIM 動態調整學習率
+
+        # 儲存最佳模型
         if avg_psnr > best_psnr:
             best_psnr = avg_psnr
             model_path = "/content/drive/MyDrive/MHSAUNet/best_psnr_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with PSNR: {best_psnr:.6f}')
 
-        # add SSIM
         if avg_ssim > best_ssim:
             best_ssim = avg_ssim
             model_path = "/content/drive/MyDrive/MHSAUNet/best_ssim_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with SSIM: {best_ssim:.6f}')
         
-        # add LPIPS
         if avg_lpips < best_lpips:
             best_lpips = avg_lpips
             model_path = "/content/drive/MyDrive/MHSAUNet/best_lpips_model.pth"
             torch.save(model.state_dict(), model_path)
             print(f'Saving model with LPIPS: {best_lpips:.6f}')
-        
-        # write log
+
+        # 寫入日誌
         now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         file_path = "/content/drive/MyDrive/MHSAUNet/results/training/metrics.md"
         file_exists = os.path.exists(file_path)
 
         with open(file_path, "a") as f:
             if not file_exists:
-                f.write("| Timestemp | Epoch | PSNR | SSIM | LPIPS |\n")
-                f.write("|-----------|-------|------|------|-------|\n")
-            
-            f.write(f"| {now} | {epoch + 1} | {avg_psnr:.6f} | {avg_ssim:.6f} | {avg_lpips:.6f} |\n")
+                f.write("|   Timestemp   |   Epoch   |    LR    |   Loss   |   PSNR   |   SSIM   |   LPIPS   |\n")
+                f.write("|---------------|-----------|----------|----------|----------|----------|-----------|\n")
+            f.write(f"|   {now}   | {epoch + 1} | {current_lr:.6f} | {avg_train_loss:.6f} |  {avg_psnr:.6f}  |  {avg_ssim:.6f}  |  {avg_lpips:.6f}  |\n")
 
 if __name__ == '__main__':
     main()
