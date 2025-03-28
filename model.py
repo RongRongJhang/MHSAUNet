@@ -134,8 +134,8 @@ class MHSAUNet(nn.Module):
     def __init__(self, num_filters=32):
         super(MHSAUNet, self).__init__()
         # 為每個分支定義 Denoiser 模組（包含 MultiHeadSelfAttention）
-        # self.denoiser_ycbcr = Denoiser(num_filters)
-        self.denoiser_hvi = Denoiser(num_filters)
+        self.denoiser_ycbcr = Denoiser(num_filters)
+        # self.denoiser_hvi = Denoiser(num_filters)
 
         # 最終的 3x3 卷積層
         self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
