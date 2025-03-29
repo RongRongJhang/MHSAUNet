@@ -2,58 +2,94 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
+ 
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, embed_size, num_heads):
+        super(MultiHeadSelfAttention, self).__init__()
+        self.embed_size = embed_size
+        self.num_heads = num_heads
+        assert embed_size % num_heads == 0
+        self.head_dim = embed_size // num_heads
+        self.query_dense = nn.Linear(embed_size, embed_size)
+        self.key_dense = nn.Linear(embed_size, embed_size)
+        self.value_dense = nn.Linear(embed_size, embed_size)
+        self.combine_heads = nn.Linear(embed_size, embed_size)
+        self._init_weights()
 
-class SELayer(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(SELayer, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction),
-            nn.ReLU(),
-            nn.Linear(channel // reduction, channel),
-            nn.Sigmoid()
-        )
+    def split_heads(self, x, batch_size):
+        x = x.reshape(batch_size, -1, self.num_heads, self.head_dim)
+        return x.permute(0, 2, 1, 3)
+
     def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y
+        batch_size, _, height, width = x.size()
+        x = x.reshape(batch_size, height * width, -1)
 
+        query = self.split_heads(self.query_dense(x), batch_size)
+        key = self.split_heads(self.key_dense(x), batch_size)
+        value = self.split_heads(self.value_dense(x), batch_size)
+
+        attention_weights = F.softmax(torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5), dim=-1)
+        attention = torch.matmul(attention_weights, value)
+        attention = attention.permute(0, 2, 1, 3).contiguous().reshape(batch_size, -1, self.embed_size)
+
+        output = self.combine_heads(attention)
+        return output.reshape(batch_size, height, width, self.embed_size).permute(0, 3, 1, 2)
+
+    def _init_weights(self):
+        init.xavier_uniform_(self.query_dense.weight)
+        init.xavier_uniform_(self.key_dense.weight)
+        init.xavier_uniform_(self.value_dense.weight)
+        init.xavier_uniform_(self.combine_heads.weight)
+        init.constant_(self.query_dense.bias, 0)
+        init.constant_(self.key_dense.bias, 0)
+        init.constant_(self.value_dense.bias, 0)
+        init.constant_(self.combine_heads.bias, 0)
+ 
 class Denoiser(nn.Module):
     def __init__(self, num_filters, kernel_size=3, activation='relu'):
         super(Denoiser, self).__init__()
-        self.conv1 = nn.Conv2d(3, num_filters, kernel_size=kernel_size, padding=1)
+        # 定義卷積層，輸入通道數改為 48 以匹配 F.pixel_unshuffle 的輸出
+        self.conv1 = nn.Conv2d(48, num_filters, kernel_size=kernel_size, padding=1)
         self.conv2 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
         self.conv3 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
         self.conv4 = nn.Conv2d(num_filters, num_filters, kernel_size=kernel_size, stride=2, padding=1)
-        
-        # 替換為兼容的注意力層（避免 JIT 問題）
-        self.bottleneck = SELayer(num_filters)  # 使用 SELayer 替代
-
+        # 加入 MultiHeadSelfAttention
+        self.bottleneck = MultiHeadSelfAttention(embed_size=num_filters, num_heads=4)
+        # 上採樣層
         self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
         self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
         self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
+        # 輸出層與殘差層
         self.output_layer = nn.Conv2d(3, 3, kernel_size=kernel_size, padding=1)
         self.res_layer = nn.Conv2d(num_filters, 3, kernel_size=kernel_size, padding=1)
         self.activation = getattr(F, activation)
         self._init_weights()
 
     def forward(self, x):
+        # 下採樣路徑
         x1 = self.activation(self.conv1(x))
         x2 = self.activation(self.conv2(x1))
         x3 = self.activation(self.conv3(x2))
         x4 = self.activation(self.conv4(x3))
-        
-        # 直接使用 SELayer（無需維度調整）
-        x4_attn = self.bottleneck(x4)  # [N, C, H, W] -> [N, C, H, W]
-        
-        x = self.up4(x4_attn)
+        # 通過 MultiHeadSelfAttention
+        x = self.bottleneck(x4)
+        # 上採樣路徑與跳躍連接
+        x = self.up4(x)
+        # 調整 x 的尺寸以匹配 x3
+        if x.shape[2:] != x3.shape[2:]:
+            x = F.interpolate(x, size=x3.shape[2:], mode='nearest')
         x = self.up3(x + x3)
+        # 調整 x 的尺寸以匹配 x2
+        if x.shape[2:] != x2.shape[2:]:
+            x = F.interpolate(x, size=x2.shape[2:], mode='nearest')
         x = self.up2(x + x2)
+        # 調整 x 的尺寸以匹配 x1
+        if x.shape[2:] != x1.shape[2:]:
+            x = F.interpolate(x, size=x1.shape[2:], mode='nearest')
         x = x + x1
         x = self.res_layer(x)
         return torch.tanh(self.output_layer(x + x))
-    
+
     def _init_weights(self):
         for layer in [self.conv1, self.conv2, self.conv3, self.conv4, self.output_layer, self.res_layer]:
             init.kaiming_uniform_(layer.weight, a=0, mode='fan_in', nonlinearity='relu')
@@ -63,11 +99,14 @@ class Denoiser(nn.Module):
 class MHSAUNet(nn.Module):
     def __init__(self, num_filters=32):
         super(MHSAUNet, self).__init__()
-        # 為每個分支定義 Denoiser 模組
+        # 為每個分支定義 Denoiser 模組（包含 MultiHeadSelfAttention）
         self.denoiser_ycbcr = Denoiser(num_filters)
 
+        # 新增的下採樣前 3x3 卷積層
+        self.pre_shuffle_conv = nn.Conv2d(3, 12, kernel_size=3, padding=1)  # 輸出通道設為 12，因為下採樣 factor=2
+
         # 最終的 3x3 卷積層
-        self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
+        self.final_conv = nn.Conv2d(3, 12, kernel_size=3, padding=1)  # 調整輸出通道為 12 以配合上採樣
 
         self.gamma = 0.4  # Gamma 校正參數
 
@@ -112,7 +151,7 @@ class MHSAUNet(nn.Module):
         return torch.pow(image + eps, gamma)
 
     def forward(self, x):
-        # 將 RGB 轉換為 YCbCr
+        # 將 RGB 轉換為 YCbCr 或 Oklab
         ycbcr = self._rgb_to_oklab(x)
         y, cb, cr = torch.split(ycbcr, 1, dim=1)
 
@@ -123,16 +162,26 @@ class MHSAUNet(nn.Module):
         # 將處理後的三個分支合併
         combined = torch.cat([y, cb, cr], dim=1)
 
+        # 新增：PixelShuffle 下採樣前的 3x3 卷積
+        combined = self.pre_shuffle_conv(combined)
+        # 使用 F.pixel_unshuffle 進行下採樣 (空間尺寸減半，通道數增加 4 倍)
+        combined = F.pixel_unshuffle(combined, downscale_factor=2)
+
         # 對合併後的分支進行去噪處理
         ycbcr_denoised = self.denoiser_ycbcr(combined)
 
         # 通過最終的 3x3 卷積層
         output = self.final_conv(ycbcr_denoised)
 
+        # 使用 F.pixel_shuffle 進行上採樣 (空間尺寸放大 2 倍，通道數減少 4 倍)
+        output = F.pixel_shuffle(output, upscale_factor=2)
+
         # 確保輸出範圍在 [0, 1]
         return torch.sigmoid(output)
-    
+
     def _init_weights(self):
+        # 初始化新增的卷積層
+        init.kaiming_uniform_(self.pre_shuffle_conv.weight, a=0, mode='fan_in', nonlinearity='relu')
+        init.constant_(self.pre_shuffle_conv.bias, 0)
         init.kaiming_uniform_(self.final_conv.weight, a=0, mode='fan_in', nonlinearity='relu')
-        if self.final_conv.bias is not None:
-            init.constant_(self.final_conv.bias, 0)
+        init.constant_(self.final_conv.bias, 0)
