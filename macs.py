@@ -1,6 +1,7 @@
 import torch
 from torchprofile import profile_macs
-from model import MHSAUNet
+# from model import MHSAUNet
+from model3 import MHSAUNet
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

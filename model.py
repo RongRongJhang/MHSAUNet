@@ -63,16 +63,24 @@ class Denoiser(nn.Module):
 class MHSAUNet(nn.Module):
     def __init__(self, num_filters=32):
         super(MHSAUNet, self).__init__()
+        self.process_ycbcr = self._create_processing_layers(num_filters)
+
         # 為每個分支定義 Denoiser 模組
         self.denoiser_ycbcr = Denoiser(num_filters)
 
         # 最終的 3x3 卷積層
-        self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
+        # self.final_conv = nn.Conv2d(3, 3, kernel_size=3, padding=1)
 
         self.gamma = 0.4  # Gamma 校正參數
 
         self._init_weights()
-
+    
+    def _create_processing_layers(self, filters):
+        return nn.Sequential(
+            nn.Conv2d(1, filters, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+    
     def _rgb_to_ycbcr(self, image):
         # 將 RGB 轉換為 YCbCr
         r, g, b = image[:, 0, :, :], image[:, 1, :, :], image[:, 2, :, :]
@@ -126,8 +134,10 @@ class MHSAUNet(nn.Module):
         # 對合併後的分支進行去噪處理
         ycbcr_denoised = self.denoiser_ycbcr(combined)
 
+        output = self.process_ycbcr(ycbcr_denoised)
+
         # 通過最終的 3x3 卷積層
-        output = self.final_conv(ycbcr_denoised)
+        # output = self.final_conv(ycbcr_denoised)
 
         # 確保輸出範圍在 [0, 1]
         return torch.sigmoid(output)
